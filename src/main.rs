@@ -1,14 +1,18 @@
 mod copy;
 
 use axum::{
-    extract::Path,
     routing::get,
     Router,
+    extract::Path,
     response::IntoResponse,
     http::StatusCode,
 };
-use copy::{Args};
+use copy::Args;
 use tokio::task;
+
+async fn hello_world() -> &'static str {
+    "Hello, world!"
+}
 
 async fn fetch_repo(Path((org, repo)): Path<(String, String)>) -> impl IntoResponse {
     let url = format!("https://github.com/{}/{}", org, repo);
@@ -30,10 +34,14 @@ async fn fetch_repo(Path((org, repo)): Path<(String, String)>) -> impl IntoRespo
     }
 }
 
-#[shuttle_runtime::main]
-async fn main() -> shuttle_axum::ShuttleAxum {
-    let router = Router::new()
+#[tokio::main]
+async fn main() {
+    // build our application with a route
+    let app = Router::new()
+        .route("/", get(hello_world))
         .route("/:org/:repo", get(fetch_repo));
 
-    Ok(router.into())
+    // run our app with hyper, listening globally on port 3000
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:8000").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
 }
