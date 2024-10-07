@@ -1,6 +1,5 @@
 use std::fs::{self, File};
-use std::io::{Write, Read};
-use std::path::PathBuf;
+use std::io::{Read};
 use std::process::Command;
 use tempfile::TempDir;
 use url::Url;
@@ -43,7 +42,6 @@ impl From<url::ParseError> for GitHubFetchError {
 pub struct Args {
     pub url: String,
     pub timeout: u32,
-    pub output_dir: PathBuf,
 }
 
 pub fn main(args: Args) -> Result<String, GitHubFetchError> {
@@ -51,8 +49,21 @@ pub fn main(args: Args) -> Result<String, GitHubFetchError> {
 
     let temp_dir = TempDir::new()?;
     let temp_path = temp_dir.path();
+    dbg!(&repo_url);
 
-    // Clone the repository with the specified timeout
+    // Check for available branches
+    let branches = get_available_branches(&repo_url)?;
+    let branch = if branches.contains(&"main".to_string()) {
+        "main"
+    } else if branches.contains(&"master".to_string()) {
+        "master"
+    } else {
+        return Err(GitHubFetchError::GitCloneError(
+            "Neither 'main' nor 'master' branch found".to_string()
+        ));
+    };
+
+    // Clone the repository with the specified timeout and the detected branch
     let status = Command::new("timeout")
         .arg(args.timeout.to_string())
         .arg("git")
@@ -61,12 +72,13 @@ pub fn main(args: Args) -> Result<String, GitHubFetchError> {
         .arg("1")
         .arg("--single-branch")
         .arg("--branch")
-        .arg("main")
+        .arg(branch)
         .arg(&repo_url)
         .arg(temp_path)
         .status()?;
 
     if !status.success() {
+        dbg!(&status);
         return Err(GitHubFetchError::GitCloneError(
             format!("Git clone timed out after {} seconds or failed.", args.timeout)
         ));
@@ -78,14 +90,6 @@ pub fn main(args: Args) -> Result<String, GitHubFetchError> {
             format!("Folder {} not found in the repository.", folder)
         ));
     }
-
-    // Create the output directory if it doesn't exist
-    fs::create_dir_all(&args.output_dir)?;
-
-    let repo_name = repo_url.split('/').last().unwrap_or("repo").trim_end_matches(".git");
-    let output_file_name = format!("{}_{}.txt", repo_name, folder.replace('/', "_"));
-    let output_file_path = args.output_dir.join(output_file_name);
-    let mut output_file = File::create(&output_file_path)?;
 
     let mut contents = String::new();
 
@@ -102,10 +106,33 @@ pub fn main(args: Args) -> Result<String, GitHubFetchError> {
         }
     }
 
-    // Write the contents to the output file
-    write!(output_file, "{}", contents)?;
-
     Ok(contents)
+}
+
+fn get_available_branches(repo_url: &str) -> Result<Vec<String>, GitHubFetchError> {
+    let output = Command::new("git")
+        .arg("ls-remote")
+        .arg("--heads")
+        .arg(repo_url)
+        .output()?;
+
+    if !output.status.success() {
+        return Err(GitHubFetchError::GitCloneError(
+            "Failed to fetch remote branches".to_string()
+        ));
+    }
+
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    let branches: Vec<String> = output_str
+        .lines()
+        .filter_map(|line| {
+            line.split_whitespace().nth(1).and_then(|ref_path| {
+                ref_path.strip_prefix("refs/heads/").map(|s| s.to_string())
+            })
+        })
+        .collect();
+
+    Ok(branches)
 }
 
 fn parse_github_url(url: &str) -> Result<(String, String), GitHubFetchError> {
@@ -113,13 +140,10 @@ fn parse_github_url(url: &str) -> Result<(String, String), GitHubFetchError> {
     let path_segments: Vec<&str> = parsed_url.path_segments().ok_or_else(||
     GitHubFetchError::InvalidUrlError("Invalid URL".to_string())
     )?.collect();
-
-    if path_segments.len() < 5 {
-        return Err(GitHubFetchError::InvalidUrlError("Invalid GitHub URL format".to_string()));
-    }
+    dbg!(&path_segments);
 
     let repo_url = format!("https://github.com/{}/{}.git", path_segments[0], path_segments[1]);
-    let folder = path_segments[4..].join("/");
+    let folder = path_segments[2..].join("/");
 
     Ok((repo_url, folder))
 }

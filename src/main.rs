@@ -8,22 +8,16 @@ use axum::{
     http::StatusCode,
 };
 use copy::{Args};
-use std::path::PathBuf;
 use tokio::task;
 
-async fn hello_world() -> &'static str {
-    "Hello, world!"
-}
-
 async fn fetch_repo(Path((org, repo)): Path<(String, String)>) -> impl IntoResponse {
-    let url = format!("https://github.com/{}/{}/tree/main", org, repo);
+    let url = format!("https://github.com/{}/{}", org, repo);
 
     // Use tokio's spawn_blocking to run the synchronous code in a separate thread
     let result = task::spawn_blocking(move || {
         let args = Args {
             url,
             timeout: 30,  // Increased timeout for potentially larger repos
-            output_dir: PathBuf::from("output"),
         };
 
         copy::main(args)
@@ -39,7 +33,6 @@ async fn fetch_repo(Path((org, repo)): Path<(String, String)>) -> impl IntoRespo
 #[shuttle_runtime::main]
 async fn main() -> shuttle_axum::ShuttleAxum {
     let router = Router::new()
-        .route("/", get(hello_world))
         .route("/:org/:repo", get(fetch_repo));
 
     Ok(router.into())
