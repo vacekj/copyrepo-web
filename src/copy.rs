@@ -4,6 +4,41 @@ use std::path::PathBuf;
 use std::process::Command;
 use tempfile::TempDir;
 use url::Url;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+pub enum GitHubFetchError {
+    IoError(std::io::Error),
+    UrlParseError(url::ParseError),
+    GitCloneError(String),
+    InvalidUrlError(String),
+}
+
+impl fmt::Display for GitHubFetchError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            GitHubFetchError::IoError(e) => write!(f, "IO error: {}", e),
+            GitHubFetchError::UrlParseError(e) => write!(f, "URL parse error: {}", e),
+            GitHubFetchError::GitCloneError(s) => write!(f, "Git clone error: {}", s),
+            GitHubFetchError::InvalidUrlError(s) => write!(f, "Invalid URL error: {}", s),
+        }
+    }
+}
+
+impl Error for GitHubFetchError {}
+
+impl From<std::io::Error> for GitHubFetchError {
+    fn from(error: std::io::Error) -> Self {
+        GitHubFetchError::IoError(error)
+    }
+}
+
+impl From<url::ParseError> for GitHubFetchError {
+    fn from(error: url::ParseError) -> Self {
+        GitHubFetchError::UrlParseError(error)
+    }
+}
 
 pub struct Args {
     pub url: String,
@@ -11,7 +46,7 @@ pub struct Args {
     pub output_dir: PathBuf,
 }
 
-pub fn main(args: Args) -> Result<String, Box<dyn std::error::Error>> {
+pub fn main(args: Args) -> Result<String, GitHubFetchError> {
     let (repo_url, folder) = parse_github_url(&args.url)?;
 
     let temp_dir = TempDir::new()?;
@@ -32,12 +67,16 @@ pub fn main(args: Args) -> Result<String, Box<dyn std::error::Error>> {
         .status()?;
 
     if !status.success() {
-        return Err(format!("Error: Git clone timed out after {} seconds or failed.", args.timeout).into());
+        return Err(GitHubFetchError::GitCloneError(
+            format!("Git clone timed out after {} seconds or failed.", args.timeout)
+        ));
     }
 
     let target_dir = temp_path.join(&folder);
     if !target_dir.exists() {
-        return Err(format!("Error: Folder {} not found in the repository.", folder).into());
+        return Err(GitHubFetchError::InvalidUrlError(
+            format!("Folder {} not found in the repository.", folder)
+        ));
     }
 
     // Create the output directory if it doesn't exist
@@ -69,12 +108,14 @@ pub fn main(args: Args) -> Result<String, Box<dyn std::error::Error>> {
     Ok(contents)
 }
 
-fn parse_github_url(url: &str) -> Result<(String, String), Box<dyn std::error::Error>> {
+fn parse_github_url(url: &str) -> Result<(String, String), GitHubFetchError> {
     let parsed_url = Url::parse(url)?;
-    let path_segments: Vec<&str> = parsed_url.path_segments().ok_or("Invalid URL")?.collect();
+    let path_segments: Vec<&str> = parsed_url.path_segments().ok_or_else(||
+    GitHubFetchError::InvalidUrlError("Invalid URL".to_string())
+    )?.collect();
 
     if path_segments.len() < 5 {
-        return Err("Invalid GitHub URL format".into());
+        return Err(GitHubFetchError::InvalidUrlError("Invalid GitHub URL format".to_string()));
     }
 
     let repo_url = format!("https://github.com/{}/{}.git", path_segments[0], path_segments[1]);
